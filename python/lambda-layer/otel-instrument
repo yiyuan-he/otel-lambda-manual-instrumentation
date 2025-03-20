@@ -1,0 +1,10 @@
+#!/bin/bash
+
+# Log the execution for debugging
+echo "OpenTelemetry Lambda wrapper starting" > /tmp/otel-wrapper.log
+
+# Set up environment for OpenTelemetry
+export PYTHONPATH=/opt/python:$PYTHONPATH
+
+# Execute the original Lambda handler
+exec "$@"

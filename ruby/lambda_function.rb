@@ -1,38 +1,30 @@
-require 'json'
+require 'bundler/setup'
 require 'opentelemetry/sdk'
+require 'opentelemetry/exporter/otlp'
+require 'opentelemetry/instrumentation/aws_sdk'
+require 'opentelemetry/instrumentation/aws_lambda'
+require 'opentelemetry/propagator/xray'
 
-# Configure OpenTelemetry before Lambda handler
+# Configure OpenTelemetry
 OpenTelemetry::SDK.configure do |c|
-  c.service_name = 'my-lambda-service'
-  c.add_span_processor(
-    OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(
-      OpenTelemetry::SDK::Trace::Export::ConsoleSpanExporter.new
-    )
-  )
+  # Use your Lambda propagator
+  c.propagators = [OpenTelemetry::Propagator::XRay.lambda_text_map_propagator]
+  
+  # Configure exporters, etc.
+  # ...
+  
+  # Install instrumentations
+  c.use 'OpenTelemetry::Instrumentation::AwsLambda'
+  c.use 'OpenTelemetry::Instrumentation::Aws::Sdk'
 end
 
+# Lambda handler
 def lambda_handler(event:, context:)
-  # Get a tracer
-  tracer = OpenTelemetry.tracer_provider.tracer('lambda-tracer')
-  
-  # Create a single span for the entire Lambda execution
-  tracer.in_span('lambda_execution') do |span|
-    # Add basic information to the span
-    span.set_attribute('request_id', context.aws_request_id)
-    
-    # Your Lambda business logic here
-    result = "Hello from Lambda!"
-    
-    # Add result information to the span
-    span.add_event('Completed processing')
-    
-    # Ensure telemetry is flushed before Lambda finishes
-    OpenTelemetry.tracer_provider.force_flush
-    
-    # Return response
-    { 
-      statusCode: 200, 
-      body: JSON.generate({ message: result })
-    }
-  end
+  # Debug logging
+  puts "Lambda environment: #{ENV['_X_AMZN_TRACE_ID']}"
+  current_span = OpenTelemetry::Trace.current_span
+  puts "Current trace ID: #{current_span.context.hex_trace_id}" if current_span.context.valid?
+
+  # Code
+  puts "Hello from Lambda!"
 end

@@ -1,6 +1,7 @@
 source 'https://rubygems.org'
 
 # Core OpenTelemetry gems
+gem 'opentelemetry-api'
 gem 'opentelemetry-sdk'
 gem 'opentelemetry-exporter-otlp'
 
@@ -13,3 +14,5 @@ gem 'aws-sdk-s3'
 
 # XML support
 gem 'rexml'
+
+gem 'opentelemetry-propagator-xray', '0.23.0'

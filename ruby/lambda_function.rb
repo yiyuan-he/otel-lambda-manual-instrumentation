@@ -25,6 +25,31 @@ rescue LoadError
   end
 end
 
+# Try to require the UDP exporter gem using the full file path
+udp_gem_file = File.join(gem_path, 'gems/aws-opentelemetry-exporter-otlp-udp-0.0.1/lib/aws-opentelemetry-exporter-otlp-udp.rb')
+begin
+  puts "Attempting to load UDP exporter from absolute path: #{udp_gem_file}"
+  require udp_gem_file
+  puts "Successfully loaded AWS OpenTelemetry UDP exporter from absolute path"
+  udp_exporter_loaded = true
+rescue LoadError => e
+  puts "Failed to load AWS OpenTelemetry UDP exporter from absolute path: #{e.message}"
+  udp_exporter_loaded = false
+end
+
+# If the above didn't work, try an alternative approach with relative path
+if !udp_exporter_loaded
+  begin
+    # Add the lib directory to the load path
+    $LOAD_PATH.unshift(File.join(gem_path, 'gems/aws-opentelemetry-exporter-otlp-udp-0.0.1/lib'))
+    require 'aws-opentelemetry-exporter-otlp-udp'
+    puts "Successfully loaded AWS OpenTelemetry UDP exporter via $LOAD_PATH"
+    udp_exporter_loaded = true
+  rescue LoadError => e
+    puts "Failed to load AWS OpenTelemetry UDP exporter via $LOAD_PATH: #{e.message}"
+  end
+end
+
 # Load other required gems
 require 'opentelemetry/sdk'
 require 'opentelemetry/exporter/otlp'
@@ -50,91 +75,57 @@ OpenTelemetry::SDK.configure do |c|
     'deployment.environment' => 'production'
   })
 
-  # Configure span processor with console exporter
-  c.add_span_processor(
-    OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(
-      OpenTelemetry::SDK::Trace::Export::ConsoleSpanExporter.new
+  # Add UDP exporter if available
+  if defined?(AWS::OpenTelemetry::Exporter::OTLP::UDP::OTLPUdpSpanExporter)
+    puts "Adding UDP exporter for telemetry data"
+    udp_trace_exporter = AWS::OpenTelemetry::Exporter::OTLP::UDP::OTLPUdpSpanExporter.new
+
+    # Add a batch span processor with the UDP exporter
+    c.add_span_processor(
+      OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(
+        udp_trace_exporter
+      )
     )
-  )
+    puts "UDP exporter configured successfully"
+  else
+    puts "UDP exporter class not available"
+  end
 
   # Install instrumentations (but we'll handle context manually)
   c.use 'OpenTelemetry::Instrumentation::AwsSdk'
+  c.use 'OpenTelemetry::Instrumentation::AwsLambda'
 end
 
 puts "OpenTelemetry configuration complete"
 
-# Lambda handler
-def lambda_handler(event:, context:)
-  # Get the X-Ray header (which is now available during handler execution)
-  xray_header = ENV['_X_AMZN_TRACE_ID']
-  puts "Lambda handler - X-Ray header: #{xray_header}"
+# Create Lambda handler module with instrumentation
+module Example
+  class Handler
+    extend OpenTelemetry::Instrumentation::AwsLambda::Wrap
 
-  # Manually extract context from X-Ray header if it exists
-  context_token = nil
+    def self.process(event:, context:)
+      # Get the X-Ray header for debugging
+      xray_header = ENV['_X_AMZN_TRACE_ID']
+      puts "Lambda handler - X-Ray header: #{xray_header}"
 
-  if xray_header && defined?(OpenTelemetry::Propagator::XRay)
-    puts "Extracting context from X-Ray header"
+      # Log current span details
+      current_span = OpenTelemetry::Trace.current_span
+      puts "Current span ID: #{current_span.context.hex_span_id}"
+      puts "Current span trace ID: #{current_span.context.hex_trace_id}"
 
-    # Create empty context and carrier
-    empty_context = OpenTelemetry::Context.empty
-    empty_carrier = {}
+      s3_client = Aws::S3::Client.new
+      s3_result = s3_client.list_buckets
 
-    # Get the propagator
-    propagator = OpenTelemetry::Propagator::XRay.lambda_text_map_propagator
-
-    # Extract context from carrier (the propagator should check ENV)
-    extracted_context = propagator.extract(empty_carrier, context: empty_context)
-
-    # Check if extraction was successful
-    extracted_span = OpenTelemetry::Trace.current_span(extracted_context)
-    if extracted_span.context.valid?
-      puts "Successfully extracted context with trace ID: #{extracted_span.context.hex_trace_id}"
-
-      # Parse X-Ray header to verify
-      parts = xray_header.split(';')
-      root_part = parts.find { |p| p.start_with?('Root=') }
-
-      if root_part
-        root_value = root_part.split('=', 2)[1]
-        if root_value.start_with?('1-')
-          # Remove the "1-" prefix and any hyphens
-          trace_id_without_version = root_value[2..].gsub('-', '')
-          puts "X-Ray trace ID: #{root_value}"
-          puts "Extracted trace ID: #{extracted_span.context.hex_trace_id}"
-          puts "Do they match? #{extracted_span.context.hex_trace_id == trace_id_without_version}"
-        end      
-      end
-
-      # Set the extracted context as current
-      context_token = OpenTelemetry::Context.attach(extracted_context)
-    else
-      puts "Failed to extract valid context from X-Ray header"
+      # Return response
+      { statusCode: 200, body: "Lambda trace completed" }
     end
+
+    # Instrument the handler method
+    instrument_handler :process
   end
+end
 
-  # Get a tracer
-  tracer = OpenTelemetry.tracer_provider.tracer('lambda_handler', '1.0')
-
-  # Create a simple child span
-  tracer.in_span('lambda_operation', kind: OpenTelemetry::Trace::SpanKind::INTERNAL) do |span|
-    # Log span information to verify parent-child relationship
-    puts "Created span with trace ID: #{span.context.hex_trace_id}"
-    puts "Span ID: #{span.context.hex_span_id}"
-
-    # Do a simple operation
-    s3_client = Aws::S3::Client.new
-    result = s3_client.list_buckets
-
-    # Add a simple attribute
-    span.set_attribute('bucket.count', result.buckets.count)
-  end
-
-  # Force flush spans before returning
-  OpenTelemetry.tracer_provider.force_flush
-
-  # Return response
-  { statusCode: 200, body: "Lambda trace completed" }
-ensure
-  # Detach the context if we set one
-  OpenTelemetry::Context.detach(context_token) if context_token
+# Export the handler function for AWS Lambda
+def lambda_handler(event:, context:)
+  Example::Handler.process(event: event, context: context)
 end

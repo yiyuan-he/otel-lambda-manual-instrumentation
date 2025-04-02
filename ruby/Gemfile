@@ -3,7 +3,7 @@ source 'https://rubygems.org'
 # Core OpenTelemetry gems
 gem 'opentelemetry-api'
 gem 'opentelemetry-sdk'
-gem 'opentelemetry-exporter-otlp'
+gem 'opentelemetry-exporter-otlp', '0.26.1'
 
 # AWS instrumentation
 gem 'opentelemetry-instrumentation-aws_sdk'

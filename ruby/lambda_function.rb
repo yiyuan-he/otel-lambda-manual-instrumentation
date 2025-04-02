@@ -3,19 +3,22 @@ require 'opentelemetry/sdk'
 require 'opentelemetry/exporter/otlp'
 require 'opentelemetry/instrumentation/aws_sdk'
 require 'opentelemetry/instrumentation/aws_lambda'
-require 'opentelemetry/propagator/xray'
+require 'aws-sdk-s3'
 
 # Configure OpenTelemetry
 OpenTelemetry::SDK.configure do |c|
   # Use your Lambda propagator
-  c.propagators = [OpenTelemetry::Propagator::XRay.lambda_text_map_propagator]
-  
+
   # Configure exporters, etc.
-  # ...
-  
+  c.add_span_processor(
+    OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(
+      OpenTelemetry::SDK::Trace::Export::ConsoleSpanExporter.new
+    )
+  )
+
   # Install instrumentations
   c.use 'OpenTelemetry::Instrumentation::AwsLambda'
-  c.use 'OpenTelemetry::Instrumentation::Aws::Sdk'
+  c.use 'OpenTelemetry::Instrumentation::AwsSdk'
 end
 
 # Lambda handler
@@ -26,5 +29,9 @@ def lambda_handler(event:, context:)
   puts "Current trace ID: #{current_span.context.hex_trace_id}" if current_span.context.valid?
 
   # Code
-  puts "Hello from Lambda!"
+  tracer = OpenTelemetry.tracer_provider.tracer('manual.tracer')
+  tracer.in_span('manual_root_span', kind: :server) do |root_span|
+    s3_client = Aws::S3::Client.new
+    s3_client.list_buckets
+  end
 end

@@ -10,3 +10,6 @@ gem 'opentelemetry-instrumentation-aws_lambda'
 
 # AWS SDK dependencies
 gem 'aws-sdk-s3'
+
+# XML support
+gem 'rexml'
